@@ -116,13 +116,11 @@ class TestFallbackMode(unittest.TestCase):
         expected = fallback_mode.numpy.vectorize(function)([1, 2, 3, 4], 2)
 
         assert isinstance(actual, numpy.ndarray)
+        assert isinstance(expected, fallback_mode.numpy.ndarray)
 
-        # ([1,2,3,4], 2) are arguments to
-        # numpy.vectorize(function), not numpy.vectorize
-        # So, it returns numpy.ndarray
-        assert isinstance(expected, numpy.ndarray)
-
-        testing.assert_array_equal(expected, actual)
+        # Since expected is fallback.ndarray,
+        # we cannot compare expected and actual
+        testing.assert_array_equal(expected._array, actual)
 
     def test_module_not_callable(self):
 

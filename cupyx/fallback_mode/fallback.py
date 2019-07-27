@@ -38,6 +38,8 @@ class _RecursiveAttr(object):
         Enable support for isinstance(instance, _RecursiveAttr instance)
         by redirecting it to appropriate isinstance method.
         """
+        if isinstance(instance, _RecursiveAttr):
+            instance = instance._numpy_object
 
         if self._cupy_object is not None:
             return isinstance(instance, self._cupy_object)
@@ -185,10 +187,10 @@ def _create_magic_methods():
     # Decorator for ndarray magic methods
     def make_method(name):
         def method(self, *args, **kwargs):
-            args, kwargs = _get_cupy_args(args, kwargs)
+            args, kwargs = _get_cupy_args()((args, kwargs))
             cupy_method = getattr(cp.ndarray, name)
             res = cupy_method(self._array, *args, **kwargs)
-            return _get_fallback_result(res)
+            return _get_fallback_result()(res)
         return method
 
     _common = [
@@ -252,53 +254,57 @@ _create_magic_methods()
 # -----------------------------------------------------------------------------
 
 
-def _get_xp_args(ndarray_instance, to_xp, arg):
-    """
-    Converts ndarray_instance type object to target object using to_xp.
+class _DataTransfer(object):
+    def __init__(self, src_instance, dst_instance, to_dst, to_src):
+        self.src_instance = src_instance
+        self.dst_instance = dst_instance
+        self.to_dst = to_dst
+        self.to_src = to_src
 
-    Args:
-        ndarray_instance (numpy.ndarray, cupy.ndarray or fallback.ndarray):
-        Objects of type `ndarray_instance` will be converted using `to_xp`.
-        to_xp (FunctionType): Method to convert ndarray_instance type objects.
-        arg (object): `ndarray_instance`, `tuple`, `list` and `dict` type
-        objects will be returned by either converting the object or it's
-        elements, if object is iterable.
-        Objects of other types is returned as it is.
+    @property
+    def rev(self):
+        return _DataTransfer(
+            self.dst_instance, self.src_instance, self.to_src, self.to_dst)
 
-    Returns:
-        Return data structure will be same as before after converting ndarrays.
-    """
+    def __call__(self, arg):
+        if isinstance(arg, self.src_instance):
+            return self.to_dst(arg)
 
-    if isinstance(arg, ndarray_instance):
-        return to_xp(arg)
+        if isinstance(arg, tuple):
+            return tuple([self(x) for x in arg])
 
-    if isinstance(arg, tuple):
-        return tuple([_get_xp_args(ndarray_instance, to_xp, x) for x in arg])
+        if isinstance(arg, dict):
+            return {name: self(x) for name, x in arg.items()}
 
-    if isinstance(arg, dict):
-        return {x_name: _get_xp_args(ndarray_instance, to_xp, x)
-                for x_name, x in arg.items()}
+        if isinstance(arg, list):
+            return [self(x) for x in arg]
 
-    if isinstance(arg, list):
-        return [_get_xp_args(ndarray_instance, to_xp, x) for x in arg]
+        if callable(arg):
 
-    return arg
+            if isinstance(arg, (np.vectorize, )):
+                return _RecursiveAttr(arg, None)
 
+        assert not isinstance(arg, self.dst_instance)
 
-def _get_cupy_result(numpy_res):
-    return _get_xp_args(np.ndarray, cp.array, numpy_res)
+        return arg
 
 
-def _get_numpy_args(args, kwargs):
-    return _get_xp_args(cp.ndarray, cp.asnumpy, (args, kwargs))
+def _get_cupy_result():
+    return _DataTransfer(
+        np.ndarray, cp.ndarray, cp.array, cp.asnumpy)
 
 
-def _get_cupy_args(args, kwargs):
-    return _get_xp_args(ndarray, ndarray._get_array, (args, kwargs))
+def _get_numpy_args():
+    return _get_cupy_result().rev
 
 
-def _get_fallback_result(cupy_res):
-    return _get_xp_args(cp.ndarray, ndarray._store, cupy_res)
+def _get_cupy_args():
+    return _DataTransfer(
+        ndarray, cp.ndarray, ndarray._get_array, ndarray._store)
+
+
+def _get_fallback_result():
+    return _get_cupy_args().rev
 
 
 # -----------------------------------------------------------------------------
@@ -320,10 +326,10 @@ def _call_cupy(func, args, kwargs):
         Result after calling func and performing data transfers.
     """
 
-    args, kwargs = _get_cupy_args(args, kwargs)
+    args, kwargs = _get_cupy_args()((args, kwargs))
     res = func(*args, **kwargs)
 
-    return _get_fallback_result(res)
+    return _get_fallback_result()(res)
 
 
 def _call_numpy(func, args, kwargs):
@@ -340,9 +346,9 @@ def _call_numpy(func, args, kwargs):
         Result after calling func and performing data transfers.
     """
 
-    args, kwargs = _get_cupy_args(args, kwargs)
-    numpy_args, numpy_kwargs = _get_numpy_args(args, kwargs)
+    args, kwargs = _get_cupy_args()((args, kwargs))
+    numpy_args, numpy_kwargs = _get_numpy_args()((args, kwargs))
     numpy_res = func(*numpy_args, **numpy_kwargs)
-    cupy_res = _get_cupy_result(numpy_res)
+    cupy_res = _get_cupy_result()(numpy_res)
 
-    return _get_fallback_result(cupy_res)
+    return _get_fallback_result()(cupy_res)
